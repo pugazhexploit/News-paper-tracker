@@ -88,6 +88,7 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
   const [searchQuery, setSearchQuery] = useState('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [supabaseSyncMessage, setSupabaseSyncMessage] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   // Form Fields
   const [fullName, setFullName] = useState('');
@@ -226,6 +227,7 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
 
     setSaveStatus('idle');
     setSupabaseSyncMessage(null);
+    setValidationError(null);
 
     if (editingCustomer) {
       setFullName(editingCustomer.fullName);
@@ -378,24 +380,35 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
   }, 0);
 
   // Form submission: save to customer registry + Supabase
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!fullName.trim() || !phone.trim() || !houseNumber.trim() || !street.trim()) {
-      alert('Please fill in required fields: Customer Name, Phone Number, House Number, and Street.');
+  const handleSave = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e && e.preventDefault) e.preventDefault();
+
+    if (!fullName.trim()) {
+      setValidationError('Please enter Customer Full Name.');
       return;
     }
 
+    const cleanPhone = phone.replace('+91', '').trim();
+    if (!cleanPhone || cleanPhone.length < 5) {
+      setValidationError('Please enter a valid Mobile Number (at least 5 digits).');
+      return;
+    }
+
+    setValidationError(null);
     setSaveStatus('saving');
 
     const customerId = editingCustomer ? editingCustomer.id : `cust-${Date.now()}`;
+    const finalHouseNumber = houseNumber.trim() || 'Door 1';
+    const finalStreet = street.trim() || area.trim() || 'Main Road';
+
     const customerObj: Customer = {
       id: customerId,
       fullName: fullName.trim(),
       phone: phone.trim(),
       alternatePhone: alternatePhone.trim() || undefined,
-      houseNumber: houseNumber.trim(),
+      houseNumber: finalHouseNumber,
       floorApartment: floorApartment.trim() || undefined,
-      street: street.trim(),
+      street: finalStreet,
       area: area.trim() || 'Chidambaram Central',
       city: city.trim() || CHIDAMBARAM_DEFAULT.city,
       district: district.trim() || CHIDAMBARAM_DEFAULT.district,
@@ -408,32 +421,29 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
       gpsAccuracy: gpsAccuracy || undefined,
       landmark: landmark.trim() || undefined,
       deliveryInstructions: deliveryInstructions.trim() || undefined,
-      assignedStaffId: assignedStaffId || 'unassigned',
+      assignedStaffId: assignedStaffId || (staffList[0]?.id || 'unassigned'),
       isActive: true,
       paymentStatus,
       monthlyAmount: totalMonthly,
       subscriptions: subscriptions.map((s) => ({ ...s, customerId }))
     };
 
-    // Save to primary registry
+    // Save to primary registry immediately
     onSaveCustomer(customerObj);
 
-    // Save/Sync to Supabase PostgreSQL customers table
-    try {
-      const syncResult = await supabaseService.saveCustomer(customerObj);
+    // Save/Sync to Supabase PostgreSQL customers table in background
+    supabaseService.saveCustomer(customerObj).then((syncResult) => {
       if (syncResult.isConfigured && syncResult.success) {
         setSupabaseSyncMessage('Saved to Supabase customers table & Local Registry');
-      } else {
-        setSupabaseSyncMessage('Saved to Local Customer Registry (Ready for Supabase sync)');
       }
-    } catch {
-      setSupabaseSyncMessage('Saved to Local Registry');
-    }
+    }).catch((err) => {
+      console.warn('Supabase sync note:', err);
+    });
 
     setSaveStatus('saved');
     setTimeout(() => {
       onClose();
-    }, 700);
+    }, 400);
   };
 
   if (!isOpen) return null;
@@ -496,9 +506,11 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
                     <User className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                     <input
                       type="text"
-                      required
                       value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
+                      onChange={(e) => {
+                        setFullName(e.target.value);
+                        if (validationError) setValidationError(null);
+                      }}
                       placeholder="e.g. Kumar Raghavan"
                       className="w-full text-xs pl-9 pr-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none"
                     />
@@ -513,9 +525,11 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
                     <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                     <input
                       type="text"
-                      required
                       value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
+                      onChange={(e) => {
+                        setPhone(e.target.value);
+                        if (validationError) setValidationError(null);
+                      }}
                       placeholder="+91 98400 12345"
                       className="w-full text-xs pl-9 pr-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none"
                     />
@@ -766,17 +780,16 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    House / Door No *
+                    House / Door No
                   </label>
                   <input
                     type="text"
-                    required
                     value={houseNumber}
                     onChange={(e) => setHouseNumber(e.target.value)}
-                    placeholder="e.g. 14 or 42/B"
+                    placeholder="e.g. 14 or 42/B (or Door 1)"
                     className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none"
                   />
-                  <p className="text-[10px] text-slate-400 mt-0.5">Check door number</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Check door number (defaults to Door 1 if blank)</p>
                 </div>
 
                 <div>
@@ -795,11 +808,10 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Street Name *
+                    Street Name
                   </label>
                   <input
                     type="text"
-                    required
                     value={street}
                     onChange={(e) => setStreet(e.target.value)}
                     placeholder="e.g. East Car Street"
@@ -1051,6 +1063,14 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
               </div>
             </div>
 
+            {/* Validation Error Alert */}
+            {validationError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-2xl flex items-center space-x-2 text-xs text-rose-800 font-bold">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{validationError}</span>
+              </div>
+            )}
+
             {/* Supabase Sync Feedback */}
             {supabaseSyncMessage && (
               <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center space-x-2 text-xs text-emerald-800">
@@ -1083,8 +1103,8 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
             </button>
 
             <button
-              type="submit"
-              form="customer-form"
+              type="button"
+              onClick={(e) => handleSave(e)}
               disabled={saveStatus === 'saving'}
               className="px-6 py-2 bg-sky-600 hover:bg-sky-700 disabled:bg-sky-400 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer flex items-center space-x-1.5"
             >

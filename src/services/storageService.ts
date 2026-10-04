@@ -103,7 +103,6 @@ export const storageService = {
       // Filter out any legacy mock fake customers
       const filtered = parsed.filter(
         (c) =>
-          c.city?.toLowerCase() === 'chidambaram' &&
           !c.id.startsWith('cust-ramesh') &&
           !c.id.startsWith('cust-selvi') &&
           !c.id.startsWith('cust-balu') &&
