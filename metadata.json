@@ -1,0 +1,6 @@
+{
+  "name": "PaperTrack – Smart Newspaper Delivery & GPS Monitoring",
+  "description": "Smart Newspaper Delivery & GPS Monitoring System for Chidambaram, Cuddalore District, Tamil Nadu (608001) with geofencing, real-time tracking, subscription management, and Google Maps integration.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
