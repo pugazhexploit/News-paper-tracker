@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node ./node_modules/vite/bin/vite.js --port=3000 --host=0.0.0.0",
-    "build": "node ./node_modules/vite/bin/vite.js build",
+    "dev": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build",
     "start": "tsx server.ts",
-    "preview": "node ./node_modules/vite/bin/vite.js preview",
+    "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "node ./node_modules/typescript/bin/tsc --noEmit"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -33,7 +33,6 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
