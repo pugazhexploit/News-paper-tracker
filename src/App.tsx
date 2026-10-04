@@ -132,6 +132,50 @@ export default function App() {
   const currentStaff = staffList.find((s) => s.id === selectedStaffId) || staffList[0];
   const currentRoute = routes.find((r) => r.staffId === currentStaff?.id) || routes[0];
 
+  // Active real-time GPS tracking for delivery staff
+  useEffect(() => {
+    if (role !== 'staff' || !currentStaff || !navigator.geolocation) return;
+
+    const isShiftActive = currentStaff.shiftStatus === 'on_route';
+
+    // Watch position in real-time with device GPS
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const acc = Math.round(pos.coords.accuracy);
+
+        storageService.updateStaffLocation(currentStaff.id, lat, lng, acc);
+      },
+      (err) => {
+        console.warn('Live staff GPS watch notice:', err.message);
+        if (err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              storageService.updateStaffLocation(
+                currentStaff.id,
+                pos.coords.latitude,
+                pos.coords.longitude,
+                Math.round(pos.coords.accuracy)
+              );
+            },
+            undefined,
+            { enableHighAccuracy: false, timeout: 8000 }
+          );
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: isShiftActive ? 3000 : 20000
+      }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [role, currentStaff?.id, currentStaff?.shiftStatus]);
+
   // Geofence proximity watcher when staff is on shift
   useEffect(() => {
     if (role !== 'staff' || !currentStaff || currentStaff.shiftStatus !== 'on_route') return;
@@ -275,6 +319,24 @@ export default function App() {
   const handleToggleStaffShift = (status: 'on_route' | 'off_duty') => {
     if (!currentStaff) return;
     storageService.updateStaffShift(currentStaff.id, status);
+
+    // If starting shift, immediately acquire device GPS coordinates without delay
+    if (status === 'on_route' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          storageService.updateStaffLocation(
+            currentStaff.id,
+            pos.coords.latitude,
+            pos.coords.longitude,
+            Math.round(pos.coords.accuracy)
+          );
+        },
+        (err) => {
+          console.warn('Initial shift GPS seed warning:', err.message);
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
   };
 
   const unreadNotifs = notifications.filter((n) => !n.isRead).length;

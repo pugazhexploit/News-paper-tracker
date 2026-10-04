@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   DeliveryStaff,
   DeliveryRoute,
@@ -19,9 +19,12 @@ import {
   ArrowRight,
   Battery,
   ShieldCheck,
-  UserPlus
+  UserPlus,
+  LocateFixed,
+  Radio
 } from 'lucide-react';
 import { formatDistance, calculateDistanceMeters, openExternalGoogleMapsNavigation } from '../../services/locationService';
+import { storageService } from '../../services/storageService';
 import { CustomerLocationDetectionModal } from '../common/CustomerLocationDetectionModal';
 
 interface StaffHomeProps {
@@ -50,7 +53,52 @@ export const StaffHome: React.FC<StaffHomeProps> = ({
   lang
 }) => {
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
+  const [isSyncingGps, setIsSyncingGps] = useState(false);
+  const [gpsFeedback, setGpsFeedback] = useState<string | null>(null);
   const isOnRoute = staff.shiftStatus === 'on_route';
+
+  // Manual trigger to pull fresh GPS fix from phone hardware
+  const handleManualGpsSync = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGpsFeedback('GPS unsupported');
+      return;
+    }
+
+    setIsSyncingGps(true);
+    setGpsFeedback('Acquiring...');
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const acc = Math.round(pos.coords.accuracy);
+        storageService.updateStaffLocation(staff.id, lat, lng, acc);
+        setIsSyncingGps(false);
+        setGpsFeedback(`±${acc}m synced`);
+        setTimeout(() => setGpsFeedback(null), 3500);
+      },
+      (err) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const acc = Math.round(pos.coords.accuracy);
+            storageService.updateStaffLocation(staff.id, lat, lng, acc);
+            setIsSyncingGps(false);
+            setGpsFeedback(`±${acc}m`);
+            setTimeout(() => setGpsFeedback(null), 3500);
+          },
+          (err2) => {
+            setIsSyncingGps(false);
+            setGpsFeedback('GPS Error');
+            setTimeout(() => setGpsFeedback(null), 4000);
+          },
+          { enableHighAccuracy: false, timeout: 8000 }
+        );
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [staff.id]);
 
   // Customer stops for this staff member
   const assignedCustomers = customers.filter((c) => c.assignedStaffId === staff.id);
@@ -120,16 +168,37 @@ export const StaffHome: React.FC<StaffHomeProps> = ({
           </div>
         </div>
 
-        {/* GPS tracking status bar */}
-        <div className="mt-5 p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between text-xs">
+        {/* GPS tracking status bar with Manual Sync */}
+        <div className="mt-5 p-3 rounded-2xl bg-white/5 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
           <div className="flex items-center space-x-2">
-            <Navigation className={`w-4 h-4 ${isOnRoute ? 'text-emerald-400' : 'text-slate-400'}`} />
-            <span className="text-slate-200">
-              GPS Geofencing: {isOnRoute ? 'Active (50m House Arrival Alert)' : 'Paused'}
-            </span>
+            <Navigation className={`w-4 h-4 shrink-0 ${isOnRoute ? 'text-emerald-400' : 'text-slate-400'}`} />
+            <div>
+              <span className="text-slate-200 font-semibold block">
+                {isOnRoute ? 'GPS Tracking Active' : 'GPS Tracking Paused'}
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {staff.currentLat && staff.currentLng
+                  ? `${staff.currentLat.toFixed(5)}, ${staff.currentLng.toFixed(5)} (±${staff.gpsAccuracy || 5}m)`
+                  : 'Acquiring GPS location...'}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center space-x-2 text-slate-400">
-            <span>Accuracy: ~{staff.gpsAccuracy || 8}m</span>
+
+          <div className="flex items-center space-x-2 self-end sm:self-auto">
+            {gpsFeedback && (
+              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-lg animate-pulse">
+                {gpsFeedback}
+              </span>
+            )}
+            <button
+              onClick={handleManualGpsSync}
+              disabled={isSyncingGps}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-600/30 hover:bg-sky-600/50 border border-sky-400/30 text-sky-200 hover:text-white rounded-xl transition text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              title="Refresh GPS from device hardware right now"
+            >
+              <LocateFixed className={`w-3.5 h-3.5 ${isSyncingGps ? 'animate-spin' : ''}`} />
+              <span>{isSyncingGps ? 'Syncing...' : 'Sync GPS'}</span>
+            </button>
           </div>
         </div>
 

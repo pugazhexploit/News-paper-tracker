@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Map,
   AdvancedMarker,
-  InfoWindow
+  InfoWindow,
+  useMap
 } from '@vis.gl/react-google-maps';
 import {
   Customer,
@@ -19,13 +20,28 @@ import {
   MapPin,
   ExternalLink,
   LocateFixed,
-  Play
+  Play,
+  Crosshair,
+  RefreshCw,
+  Radio
 } from 'lucide-react';
 import {
   calculateDistanceMeters,
   formatDistance,
   openExternalGoogleMapsNavigation
 } from '../../services/locationService';
+import { storageService } from '../../services/storageService';
+
+// Subcomponent to dynamically pan/center map when coordinates change or user clicks center
+const MapPanController: React.FC<{ targetLat?: number; targetLng?: number }> = ({ targetLat, targetLng }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (map && targetLat && targetLng) {
+      map.panTo({ lat: targetLat, lng: targetLng });
+    }
+  }, [map, targetLat, targetLng]);
+  return null;
+};
 
 interface StaffRouteMapProps {
   staff: DeliveryStaff;
@@ -51,8 +67,60 @@ export const StaffRouteMap: React.FC<StaffRouteMapProps> = ({
     : { lat: 11.3992, lng: 79.6936 };
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [isSyncingGps, setIsSyncingGps] = useState(false);
+  const [gpsStatusMsg, setGpsStatusMsg] = useState<string | null>(null);
 
   const assignedCustomers = customers.filter((c) => c.assignedStaffId === staff.id);
+
+  // Manual High-Accuracy GPS refresh
+  const handleRecaptureLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGpsStatusMsg('GPS not supported on device');
+      return;
+    }
+
+    setIsSyncingGps(true);
+    setGpsStatusMsg(lang === 'ta' ? 'ஜிபிஎஸ் பெறுகிறது...' : 'Acquiring high-precision GPS...');
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const acc = Math.round(pos.coords.accuracy);
+
+        storageService.updateStaffLocation(staff.id, lat, lng, acc);
+        setIsSyncingGps(false);
+        setGpsStatusMsg(
+          lang === 'ta'
+            ? `ஜிபிஎஸ் புதுப்பிக்கப்பட்டது (துல்லியம்: ±${acc}மீ)`
+            : `GPS Refreshed! Accuracy: ±${acc}m`
+        );
+        setTimeout(() => setGpsStatusMsg(null), 4000);
+      },
+      (err) => {
+        console.warn('Manual GPS error:', err.message);
+        // Fallback with lower accuracy if high precision timed out
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const acc = Math.round(pos.coords.accuracy);
+            storageService.updateStaffLocation(staff.id, lat, lng, acc);
+            setIsSyncingGps(false);
+            setGpsStatusMsg(`GPS Updated (±${acc}m)`);
+            setTimeout(() => setGpsStatusMsg(null), 4000);
+          },
+          (errFallback) => {
+            setIsSyncingGps(false);
+            setGpsStatusMsg(`GPS Error: ${errFallback.message || 'Check location permission'}`);
+            setTimeout(() => setGpsStatusMsg(null), 5000);
+          },
+          { enableHighAccuracy: false, timeout: 10000 }
+        );
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [staff.id, lang]);
 
   const getCustomerDeliveryStatus = (customerId: string): 'delivered' | 'pending' | 'missed' => {
     const custEntries = entries.filter((e) => e.customerId === customerId);
@@ -116,6 +184,9 @@ export const StaffRouteMap: React.FC<StaffRouteMapProps> = ({
           disableDefaultUI={false}
           className="w-full h-full"
         >
+          {/* Auto Map Recentering Controller */}
+          <MapPanController targetLat={staff.currentLat} targetLng={staff.currentLng} />
+
           {/* Staff Current Position Marker */}
           {staff.currentLat && staff.currentLng && (
             <AdvancedMarker
@@ -123,12 +194,12 @@ export const StaffRouteMap: React.FC<StaffRouteMapProps> = ({
               title="Your Current Location (Delivery Partner)"
             >
               <div className="relative z-30">
-                <span className="absolute -inset-2 rounded-full bg-sky-500/40 animate-ping" />
-                <div className="w-10 h-10 rounded-full bg-slate-900 border-2 border-white text-sky-400 flex items-center justify-center shadow-2xl">
+                <span className="absolute -inset-3 rounded-full bg-sky-500/30 animate-ping" />
+                <div className="w-11 h-11 rounded-full bg-slate-900 border-2 border-white text-sky-400 flex items-center justify-center shadow-2xl">
                   <Navigation className="w-5 h-5 transform rotate-45" />
                 </div>
-                <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 whitespace-nowrap bg-slate-900 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded shadow">
-                  You (🛵)
+                <div className="absolute -top-7 left-1/2 transform -translate-x-1/2 whitespace-nowrap bg-slate-900 text-white text-[10px] font-extrabold px-2 py-0.5 rounded shadow border border-slate-700">
+                  You 🛵 (±{staff.gpsAccuracy || 5}m)
                 </div>
               </div>
             </AdvancedMarker>
@@ -193,6 +264,26 @@ export const StaffRouteMap: React.FC<StaffRouteMapProps> = ({
             </InfoWindow>
           )}
         </Map>
+
+        {/* Floating Quick Recenter & GPS Sync Controls */}
+        <div className="absolute top-4 right-4 z-20 flex flex-col items-end space-y-2">
+          <button
+            onClick={handleRecaptureLocation}
+            disabled={isSyncingGps}
+            className="flex items-center space-x-2 px-3.5 py-2.5 bg-white text-slate-800 hover:text-sky-600 text-xs font-bold rounded-2xl shadow-xl border border-slate-200 transition cursor-pointer hover:shadow-2xl active:scale-95"
+            title="Recalculate exact GPS coordinates using device sensor"
+          >
+            <LocateFixed className={`w-4 h-4 text-sky-600 ${isSyncingGps ? 'animate-spin' : ''}`} />
+            <span>{isSyncingGps ? 'Getting GPS...' : 'Locate Me'}</span>
+          </button>
+
+          {gpsStatusMsg && (
+            <div className="px-3 py-1.5 bg-slate-900/90 backdrop-blur text-white text-[11px] font-semibold rounded-xl shadow-lg border border-slate-700 animate-fade-in flex items-center space-x-1.5">
+              <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+              <span>{gpsStatusMsg}</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
