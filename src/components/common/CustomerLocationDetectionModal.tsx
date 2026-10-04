@@ -120,8 +120,26 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
   // Maps Libraries
   const placesLib = useMapsLibrary('places');
 
-  // Extract address components into state fields
-  const applyAddressComponents = useCallback((components: google.maps.GeocoderAddressComponent[]) => {
+  // Helper to remove any Plus Code prefix from formatted address
+  const cleanAddress = (addr: string): string => {
+    return addr.replace(/^[A-Z0-9]{4}\+[A-Z0-9]{2,4}[,\s]*/i, '').trim();
+  };
+
+  // Comprehensive multi-result address component extraction
+  const applyAddressResults = useCallback((results: google.maps.GeocoderResult[]) => {
+    if (!results || results.length === 0) return;
+
+    // Pick best result: prioritize street_address or premise
+    const streetResult = results.find(
+      (r) => r.types.includes('street_address') || r.types.includes('premise') || r.types.includes('subpremise')
+    );
+    const bestResult = streetResult || results[0];
+
+    const rawAddr = bestResult.formatted_address || '';
+    const cleanedAddr = cleanAddress(rawAddr);
+    setFormattedAddress(cleanedAddr || rawAddr);
+    if (bestResult.place_id) setPlaceId(bestResult.place_id);
+
     let detectedHouse = '';
     let detectedStreet = '';
     let detectedArea = '';
@@ -130,22 +148,34 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
     let detectedState = '';
     let detectedPincode = '';
 
-    for (const comp of components) {
-      const types = comp.types;
-      if (types.includes('street_number') || types.includes('premise') || types.includes('subpremise')) {
-        detectedHouse = comp.long_name;
-      } else if (types.includes('route')) {
-        detectedStreet = comp.long_name;
-      } else if (types.includes('sublocality_level_1') || types.includes('sublocality') || types.includes('neighborhood')) {
-        detectedArea = comp.long_name;
-      } else if (types.includes('locality') || types.includes('postal_town')) {
-        detectedCity = comp.long_name;
-      } else if (types.includes('administrative_area_level_2')) {
-        detectedDistrict = comp.long_name;
-      } else if (types.includes('administrative_area_level_1')) {
-        detectedState = comp.long_name;
-      } else if (types.includes('postal_code')) {
-        detectedPincode = comp.long_name;
+    // Search across all geocoder results to find every possible address detail
+    for (const res of results) {
+      if (!res.address_components) continue;
+      for (const comp of res.address_components) {
+        const types = comp.types;
+        if (!detectedHouse && (types.includes('street_number') || types.includes('premise') || types.includes('subpremise'))) {
+          if (!comp.long_name.includes('+') && comp.long_name.length <= 15) {
+            detectedHouse = comp.long_name;
+          }
+        }
+        if (!detectedStreet && types.includes('route')) {
+          detectedStreet = comp.long_name;
+        }
+        if (!detectedArea && (types.includes('sublocality_level_1') || types.includes('sublocality') || types.includes('neighborhood'))) {
+          detectedArea = comp.long_name;
+        }
+        if (!detectedCity && (types.includes('locality') || types.includes('postal_town'))) {
+          detectedCity = comp.long_name;
+        }
+        if (!detectedDistrict && (types.includes('administrative_area_level_2') || types.includes('administrative_area_level_3'))) {
+          detectedDistrict = comp.long_name;
+        }
+        if (!detectedState && types.includes('administrative_area_level_1')) {
+          detectedState = comp.long_name;
+        }
+        if (!detectedPincode && types.includes('postal_code')) {
+          detectedPincode = comp.long_name;
+        }
       }
     }
 
@@ -158,26 +188,47 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
     if (detectedPincode) setPincode(detectedPincode);
   }, []);
 
-  // Reverse Geocoding helper using Google Maps Geocoder API
+  // Reverse Geocoding helper with SDK + Direct Fetch fallback
   const reverseGeocode = useCallback((lat: number, lng: number) => {
-    if (typeof google === 'undefined' || !google.maps || !google.maps.Geocoder) {
-      return;
-    }
     setIsGeocoding(true);
-    const geocoder = new google.maps.Geocoder();
 
-    geocoder.geocode({ location: { lat, lng } }, (results, status) => {
-      setIsGeocoding(false);
-      if (status === google.maps.GeocoderStatus.OK && results && results[0]) {
-        const place = results[0];
-        setFormattedAddress(place.formatted_address || '');
-        if (place.place_id) setPlaceId(place.place_id);
-        applyAddressComponents(place.address_components);
+    const trySdkGeocoder = (): boolean => {
+      if (typeof google !== 'undefined' && google.maps && google.maps.Geocoder) {
+        const geocoder = new google.maps.Geocoder();
+        geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+          setIsGeocoding(false);
+          if (status === google.maps.GeocoderStatus.OK && results && results.length > 0) {
+            applyAddressResults(results);
+          } else {
+            tryDirectFetch();
+          }
+        });
+        return true;
       }
-    });
-  }, [applyAddressComponents]);
+      return false;
+    };
 
-  // Automatic GPS Detection Handler
+    const tryDirectFetch = async () => {
+      try {
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyBeizfMp4-LZZGVPRxm4RDSGasVKtvhxfY';
+        const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`);
+        const data = await res.json();
+        setIsGeocoding(false);
+        if (data.status === 'OK' && data.results && data.results.length > 0) {
+          applyAddressResults(data.results);
+        }
+      } catch (err) {
+        setIsGeocoding(false);
+        console.warn('Direct geocoding fetch note:', err);
+      }
+    };
+
+    if (!trySdkGeocoder()) {
+      tryDirectFetch();
+    }
+  }, [applyAddressResults]);
+
+  // Dual-stage GPS Detection: High-Accuracy GPS first, standard accuracy fallback
   const detectCurrentLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setGpsStatus('error');
@@ -198,24 +249,46 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
         setGpsStatus('detected');
         setMapZoom(18);
 
-        // Reverse geocode detected coordinates
         reverseGeocode(lat, lng);
       },
       (error) => {
-        console.warn('Browser Geolocation error or permission denied:', error.message);
+        console.warn('High-accuracy GPS attempt note:', error.message);
         if (error.code === error.PERMISSION_DENIED) {
           setGpsStatus('denied');
-        } else {
-          setGpsStatus('error');
+          setLatitude(CHIDAMBARAM_DEFAULT.lat);
+          setLongitude(CHIDAMBARAM_DEFAULT.lng);
+          setGpsAccuracy(null);
+          return;
         }
-        // Fallback to Chidambaram default center
-        setLatitude(CHIDAMBARAM_DEFAULT.lat);
-        setLongitude(CHIDAMBARAM_DEFAULT.lng);
-        setGpsAccuracy(null);
+
+        // Secondary fallback to standard network/WiFi geolocation
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const acc = Math.round(pos.coords.accuracy);
+
+            setLatitude(lat);
+            setLongitude(lng);
+            setGpsAccuracy(acc);
+            setGpsStatus('detected');
+            setMapZoom(17);
+
+            reverseGeocode(lat, lng);
+          },
+          (err2) => {
+            console.warn('Standard geolocation failed:', err2.message);
+            setGpsStatus('error');
+            setLatitude(CHIDAMBARAM_DEFAULT.lat);
+            setLongitude(CHIDAMBARAM_DEFAULT.lng);
+            setGpsAccuracy(null);
+          },
+          { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 }
+        );
       },
       {
         enableHighAccuracy: true,
-        timeout: 12000,
+        timeout: 9000,
         maximumAge: 0
       }
     );
@@ -316,41 +389,91 @@ export const CustomerLocationDetectionModal: React.FC<CustomerLocationDetectionM
           setLatitude(lat);
           setLongitude(lng);
           setMapZoom(18);
-          setPlaceId(place.place_id);
-          setFormattedAddress(place.formatted_address || place.name || '');
+          if (place.place_id) setPlaceId(place.place_id);
+          const rawName = place.formatted_address || place.name || '';
+          setFormattedAddress(cleanAddress(rawName));
 
-          if (place.address_components) {
-            applyAddressComponents(place.address_components);
-          }
+          // Run full reverse geocode on exact coordinates for complete component coverage
+          reverseGeocode(lat, lng);
           setGpsStatus('idle');
         }
       });
     }
-  }, [placesLib, isOpen, applyAddressComponents]);
+  }, [placesLib, isOpen, reverseGeocode]);
 
-  // Manual fallback search if user presses Enter or clicks Search button
+  // High-precision manual search supporting coordinates, plus codes, landmarks & addresses
   const handleManualSearch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const query = searchQuery.trim();
-    if (!query || typeof google === 'undefined' || !google.maps || !google.maps.Geocoder) return;
+    if (!query) return;
 
-    setIsGeocoding(true);
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({ address: `${query}, Tamil Nadu, India` }, (results, status) => {
-      setIsGeocoding(false);
-      if (status === google.maps.GeocoderStatus.OK && results && results[0]) {
-        const place = results[0];
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
+    // Check if query is latitude, longitude coordinates
+    const coordMatch = query.match(/^([-+]?[0-9]*\.?[0-9]+)[\s,]+([-+]?[0-9]*\.?[0-9]+)$/);
+    if (coordMatch) {
+      const lat = parseFloat(coordMatch[1]);
+      const lng = parseFloat(coordMatch[2]);
+      if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
         setLatitude(lat);
         setLongitude(lng);
         setMapZoom(18);
-        if (place.place_id) setPlaceId(place.place_id);
-        setFormattedAddress(place.formatted_address || '');
-        applyAddressComponents(place.address_components);
+        reverseGeocode(lat, lng);
         setGpsStatus('idle');
+        return;
       }
-    });
+    }
+
+    setIsGeocoding(true);
+
+    const trySdkSearch = (searchStr: string) => {
+      if (typeof google !== 'undefined' && google.maps && google.maps.Geocoder) {
+        const geocoder = new google.maps.Geocoder();
+        geocoder.geocode({ address: searchStr }, (results, status) => {
+          if (status === google.maps.GeocoderStatus.OK && results && results.length > 0) {
+            setIsGeocoding(false);
+            const best = results[0];
+            const lat = best.geometry.location.lat();
+            const lng = best.geometry.location.lng();
+            setLatitude(lat);
+            setLongitude(lng);
+            setMapZoom(18);
+            applyAddressResults(results);
+            setGpsStatus('idle');
+          } else if (!searchStr.includes('Tamil Nadu')) {
+            trySdkSearch(`${searchStr}, Tamil Nadu, India`);
+          } else {
+            tryDirectSearch(searchStr);
+          }
+        });
+        return true;
+      }
+      return false;
+    };
+
+    const tryDirectSearch = async (searchStr: string) => {
+      try {
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyBeizfMp4-LZZGVPRxm4RDSGasVKtvhxfY';
+        const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(searchStr)}&key=${apiKey}`);
+        const data = await res.json();
+        setIsGeocoding(false);
+        if (data.status === 'OK' && data.results && data.results.length > 0) {
+          const best = data.results[0];
+          const lat = best.geometry.location.lat;
+          const lng = best.geometry.location.lng;
+          setLatitude(lat);
+          setLongitude(lng);
+          setMapZoom(18);
+          applyAddressResults(data.results);
+          setGpsStatus('idle');
+        }
+      } catch (err) {
+        setIsGeocoding(false);
+        console.warn('Direct search note:', err);
+      }
+    };
+
+    if (!trySdkSearch(query)) {
+      tryDirectSearch(query);
+    }
   };
 
   // Safe handler when marker is dragged or map is clicked
